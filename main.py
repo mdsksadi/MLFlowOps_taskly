@@ -16,10 +16,10 @@ from models import TaskModel
 app = FastAPI(title="Tasks API", description="Bootcamp demo app — Week 1/2/8")
 
 mlflow.set_tracking_uri(
-    os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 )
 
-MODEL_URI = "models:/task-priority-classifier/1"
+MODEL_URI = "models:/task-priority-classifier/3"
 
 model = mlflow.pyfunc.load_model(MODEL_URI)
 

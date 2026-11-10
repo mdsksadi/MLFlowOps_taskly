@@ -10,7 +10,7 @@ Reads labeled tasks straight from the app's Postgres database (any row with a
 enough labeled rows yet.
 
 Usage:
-    MLFLOW_TRACKING_URI=http://localhost:5000 python model/train.py
+    MLFLOW_TRACKING_URI=http://mlflow:5000 python model/train.py
 """
 import os
 
@@ -27,7 +27,7 @@ from sqlalchemy import create_engine
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg2://tasks:tasks@localhost:5432/tasks"
 )
-EXPERIMENT_NAME = "task-priority-classifier"
+EXPERIMENT_NAME = "task-priority-classifier-docker"
 REGISTERED_MODEL_NAME = "task-priority-classifier"
 
 
@@ -48,7 +48,7 @@ def load_dataset() -> pd.DataFrame:
 
 
 def main() -> None:
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000"))
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     df = load_dataset()
