@@ -25,6 +25,23 @@ services:
       timeout: 5s
       retries: 5
 
+  mlflow:
+    build: .
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://tasks:tasks@db:5432/mlflow
+      --serve-artifacts
+      --artifacts-destination /mlartifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-artifacts:/mlartifacts
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build: .
     ports:
@@ -32,11 +49,14 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://tasks:tasks@db:5432/tasks
       REDIS_URL: redis://redis:6379/0
+      MLFLOW_TRACKING_URI: http://mlflow:5000
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mlflow:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 10s
@@ -45,3 +65,4 @@ services:
 
 volumes:
   db-data:
+  mlflow-artifacts:
