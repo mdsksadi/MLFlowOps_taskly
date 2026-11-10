@@ -3,6 +3,12 @@ import os
 import mlflow
 import mlflow.pyfunc
 
+import logging
+import time
+
+from prometheus_client import Counter, Histogram, Gauge, generate_latest
+from fastapi.responses import Response
+
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -14,6 +20,40 @@ from database import Base, engine, get_db
 from models import TaskModel
 
 app = FastAPI(title="Tasks API", description="Bootcamp demo app — Week 1/2/8")
+
+# Structured logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("taskly-api")
+
+# Model version
+MODEL_VERSION = "3"
+
+# Prometheus metrics
+PREDICTIONS_TOTAL = Counter(
+    "taskly_predictions_total",
+    "Total predictions",
+    ["model_version", "priority"]
+)
+
+PREDICTION_ERRORS_TOTAL = Counter(
+    "taskly_prediction_errors_total",
+    "Total prediction errors",
+    ["model_version"]
+)
+
+PREDICTION_LATENCY = Histogram(
+    "taskly_prediction_latency_seconds",
+    "Prediction latency in seconds",
+    ["model_version"]
+)
+
+MODEL_VERSION_INFO = Gauge(
+    "taskly_model_version_info",
+    "Currently loaded model version",
+    ["model_version"]
+)
+
+MODEL_VERSION_INFO.labels(model_version=MODEL_VERSION).set(1)
 
 mlflow.set_tracking_uri(
     os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
@@ -42,6 +82,13 @@ class TaskOut(Task):
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "tasks-api"}
+
+@app.get("/metrics")
+def metrics():
+    return Response(
+        content=generate_latest(),
+        media_type="text/plain; version=0.0.4"
+    )
 
 
 @app.get("/tasks", response_model=List[TaskOut])
@@ -109,9 +156,47 @@ class PredictRequest(BaseModel):
 def predict_priority(request: PredictRequest):
     text = request.title + " " + (request.description or "")
 
-    prediction = model.predict([text])
+    start_time = time.perf_counter()
 
-    return {
-        "title": request.title,
-        "predicted_priority": str(prediction[0])
-    }
+    try:
+        prediction = model.predict([text])
+        priority = str(prediction[0])
+
+        PREDICTIONS_TOTAL.labels(
+            model_version=MODEL_VERSION,
+            priority=priority
+        ).inc()
+
+        logger.info(
+            "Prediction successful",
+            extra={
+                "model_version": MODEL_VERSION,
+                "predicted_priority": priority,
+                "title": request.title,
+            },
+        )
+
+        return {
+            "title": request.title,
+            "predicted_priority": priority,
+        }
+
+    except Exception:
+        PREDICTION_ERRORS_TOTAL.labels(
+            model_version=MODEL_VERSION
+        ).inc()
+
+        logger.exception(
+            "Prediction failed",
+            extra={"model_version": MODEL_VERSION},
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Prediction failed",
+        )
+
+    finally:
+        PREDICTION_LATENCY.labels(
+            model_version=MODEL_VERSION
+        ).observe(time.perf_counter() - start_time)
