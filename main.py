@@ -1,3 +1,8 @@
+import os
+
+import mlflow
+import mlflow.pyfunc
+
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -9,6 +14,14 @@ from database import Base, engine, get_db
 from models import TaskModel
 
 app = FastAPI(title="Tasks API", description="Bootcamp demo app — Week 1/2/8")
+
+mlflow.set_tracking_uri(
+    os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
+)
+
+MODEL_URI = "models:/task-priority-classifier/1"
+
+model = mlflow.pyfunc.load_model(MODEL_URI)
 
 Base.metadata.create_all(bind=engine)
 
@@ -85,3 +98,20 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     db.delete(db_task)
     db.commit()
     cache.invalidate_task_cache(task_id)
+
+
+class PredictRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+
+
+@app.post("/predict")
+def predict_priority(request: PredictRequest):
+    text = request.title + " " + (request.description or "")
+
+    prediction = model.predict([text])
+
+    return {
+        "title": request.title,
+        "predicted_priority": str(prediction[0])
+    }
