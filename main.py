@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("taskly-api")
 
 # Model version
-MODEL_VERSION = "3"
+# MODEL_VERSION = "3"
 
 # Prometheus metrics
 PREDICTIONS_TOTAL = Counter(
@@ -53,15 +53,45 @@ MODEL_VERSION_INFO = Gauge(
     ["model_version"]
 )
 
-MODEL_VERSION_INFO.labels(model_version=MODEL_VERSION).set(1)
-
-mlflow.set_tracking_uri(
-    os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+MLFLOW_TRACKING_URI = os.environ.get(
+    "MLFLOW_TRACKING_URI",
+    "http://mlflow:5000"
 )
 
-MODEL_URI = "models:/task-priority-classifier/3"
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+# MODEL_URI = "models:/task-priority-classifier/3"
+
+# model = mlflow.pyfunc.load_model(MODEL_URI)
+
+
+from mlflow import MlflowClient
+
+MODEL_NAME = "task-priority-classifier"
+MODEL_ALIAS = "production"
+
+client = MlflowClient()
+
+# Resolve production alias to actual model version
+model_version = client.get_model_version_by_alias(
+    MODEL_NAME, MODEL_ALIAS
+)
+
+MODEL_VERSION = str(model_version.version)
+
+MODEL_URI = f"models:/{MODEL_NAME}@{MODEL_ALIAS}"
 
 model = mlflow.pyfunc.load_model(MODEL_URI)
+
+MODEL_VERSION_INFO.labels(
+    model_version=MODEL_VERSION
+).set(1)
+
+logger.info(
+    "Loaded MLflow model",
+    extra={"model_version": MODEL_VERSION}
+)
+
 
 Base.metadata.create_all(bind=engine)
 
