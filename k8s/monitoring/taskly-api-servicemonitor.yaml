@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: taskly-api
+  namespace: prometheus
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - mlflow
+  selector:
+    matchLabels:
+      app: taskly-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

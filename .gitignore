@@ -6,3 +6,17 @@ venv/
 *.egg-info/
 dist/
 mlartifacts/
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Temporary test artifacts
+s3-test.txt
+
+# Secrets
+.env.*
+!.env.example
+*.pem
