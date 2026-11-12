@@ -45,13 +45,13 @@ resource "aws_iam_role_policy" "mlflow_s3" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = ["s3:ListBucket"]
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
         Resource = "arn:aws:s3:::${var.artifact_bucket_name}"
       },
       {
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         Resource = "arn:aws:s3:::${var.artifact_bucket_name}/*"
       }
     ]
