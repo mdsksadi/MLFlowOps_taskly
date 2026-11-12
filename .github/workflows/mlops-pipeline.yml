@@ -1,0 +1,157 @@
+
+name: Taskly MLOps Pipeline
+
+on:
+  push:
+    branches:
+      - feature/api-observability
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: taskly-api
+  EKS_CLUSTER: eks-sadi
+  NAMESPACE: mlflow
+  SPOT_INSTANCE: i-0bbebe523b3730d33
+  MLFLOW_TRACKING_URI: http://k8s-mlflow-mlflow-81f1a6e4c1-036740116c9dab06.elb.us-east-1.amazonaws.com:5000
+
+jobs:
+  train:
+    name: Train on Spot and Register Staging Model
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Train on Spot EC2 using SSM
+        shell: bash
+        run: |
+          CMD=$(aws ssm send-command \
+            --instance-ids "$SPOT_INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "set -e",
+              "cd /home/ubuntu/MLFlowOps_taskly",
+              "export DATABASE_URL=$(aws ssm get-parameter --region us-east-1 --name /taskly/training/DATABASE_URL --with-decryption --query Parameter.Value --output text)",
+              "export MLFLOW_TRACKING_URI=http://k8s-mlflow-mlflow-81f1a6e4c1-036740116c9dab06.elb.us-east-1.amazonaws.com:5000",
+              "./.venv/bin/python model/train.py",
+              "MLFLOW_TRACKING_URI=http://k8s-mlflow-mlflow-81f1a6e4c1-036740116c9dab06.elb.us-east-1.amazonaws.com:5000 ./.venv/bin/python -c \"from mlflow import MlflowClient; c=MlflowClient(); v=c.get_latest_versions(\\\"task-priority-classifier\\\", stages=[\\\"None\\\"])[0].version; c.set_registered_model_alias(\\\"task-priority-classifier\\\",\\\"staging\\\",v); print(\\\"STAGING_VERSION\\\",v)\""
+            ]' \
+            --query Command.CommandId --output text)
+
+          echo "SSM command: $CMD"
+          for i in $(seq 1 60); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD" --instance-id "$SPOT_INSTANCE" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            echo "Training status: $STATUS"
+            if [ "$STATUS" = Success ]; then
+              aws ssm get-command-invocation \
+                --command-id "$CMD" --instance-id "$SPOT_INSTANCE" \
+                --query StandardOutputContent --output text
+              exit 0
+            fi
+            if [ "$STATUS" = Failed ] || [ "$STATUS" = Cancelled ] || [ "$STATUS" = TimedOut ]; then
+              aws ssm get-command-invocation \
+                --command-id "$CMD" --instance-id "$SPOT_INSTANCE" \
+                --query StandardErrorContent --output text
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "Training timed out"
+          exit 1
+
+  staging:
+    name: Build and Deploy Staging
+    needs: train
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build and push API image
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY"
+          aws ecr get-login-password | docker login \
+            --username AWS --password-stdin "$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
+          docker build -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:staging" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:staging"
+          echo "IMAGE=$IMAGE:$GITHUB_SHA" >> "$GITHUB_ENV"
+
+      - name: Deploy staging
+        run: |
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+          kubectl apply -f k8s/api-staging.yaml
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          kubectl set image deployment/taskly-api-staging \
+            taskly-api="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA" \
+            -n "$NAMESPACE"
+          kubectl rollout status deployment/taskly-api-staging -n "$NAMESPACE" --timeout=180s
+
+  production:
+    name: Promote and Deploy Production
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Promote MLflow staging alias to production
+        shell: bash
+        run: |
+          CMD=$(aws ssm send-command \
+            --instance-ids "$SPOT_INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "set -e",
+              "cd /home/ubuntu/MLFlowOps_taskly",
+              "export MLFLOW_TRACKING_URI=http://k8s-mlflow-mlflow-81f1a6e4c1-036740116c9dab06.elb.us-east-1.amazonaws.com:5000",
+              "./.venv/bin/python model/promote.py production"
+            ]' --query Command.CommandId --output text)
+
+          for i in $(seq 1 30); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$CMD" \
+              --instance-id "$SPOT_INSTANCE" --query Status --output text 2>/dev/null || echo Pending)
+            echo "Promotion status: $STATUS"
+            if [ "$STATUS" = Success ]; then
+              aws ssm get-command-invocation --command-id "$CMD" \
+                --instance-id "$SPOT_INSTANCE" --query StandardOutputContent --output text
+              exit 0
+            fi
+            if [ "$STATUS" = Failed ] || [ "$STATUS" = Cancelled ] || [ "$STATUS" = TimedOut ]; then
+              aws ssm get-command-invocation --command-id "$CMD" \
+                --instance-id "$SPOT_INSTANCE" --query StandardErrorContent --output text
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Promotion timed out"
+          exit 1
+
+      - name: Deploy production API
+        run: |
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          kubectl set image deployment/taskly-api \
+            taskly-api="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$GITHUB_SHA" \
+            -n "$NAMESPACE"
+          kubectl rollout status deployment/taskly-api -n "$NAMESPACE" --timeout=180s

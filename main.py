@@ -68,7 +68,7 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 from mlflow import MlflowClient
 
 MODEL_NAME = "task-priority-classifier"
-MODEL_ALIAS = "production"
+MODEL_ALIAS = os.getenv("MODEL_ALIAS", "production")
 
 client = MlflowClient()
 
