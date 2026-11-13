@@ -1,0 +1,27 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: taskly-api-alerts
+  namespace: prometheus
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: taskly-api.rules
+      rules:
+        - alert: TasklyHighPredictionErrorRate
+          expr: |
+            (
+              sum(rate(taskly_prediction_errors_total[5m]))
+              /
+              clamp_min(
+                sum(rate(taskly_predictions_total[5m])),
+                0.001
+              )
+            ) * 100 > 5
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Taskly API prediction error rate is high"
+            description: "Prediction error rate is above 5% for 2 minutes."
