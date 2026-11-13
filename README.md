@@ -1,3 +1,221 @@
+# MLFlowOps – Task Priority Classification Platform
+
+An end-to-end MLOps platform that automates model training, experiment tracking, model registry management, Kubernetes deployment, and production monitoring.
+
+## Project Overview
+
+This project demonstrates an automated machine learning lifecycle using:
+
+- **MLflow** – experiment tracking and model registry
+- **Amazon S3** – ML model artifact storage
+- **AWS EC2 Spot Instances** – remote model training
+- **GitHub Actions** – automated CI/CD pipeline
+- **Amazon EKS** – Kubernetes-based model serving
+- **FastAPI** – prediction REST API
+- **Prometheus** – application and infrastructure metrics
+- **Grafana** – dashboards and alert visualization
+- **Terraform** – infrastructure provisioning
+
+The application predicts task priority (`low`, `medium`, or `high`) from task titles and descriptions.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Developer / GitHub] --> B[GitHub Actions CI/CD]
+
+    B --> C[EC2 Spot Training]
+    C --> D[MLflow Tracking Server]
+    C --> E[S3 Artifact Store]
+
+    D --> F[MLflow Model Registry]
+    E --> F
+
+    F --> G[Staging Model]
+    G --> H[Production Approval]
+    H --> I[Production Model Alias]
+
+    I --> J[FastAPI on Amazon EKS]
+    J --> K[Prediction API]
+
+    J --> L[Prometheus]
+    L --> M[Grafana Dashboard]
+    L --> N[Prediction Error Alert]
+
+    O[Terraform] --> P[AWS Infrastructure]
+    P --> B
+    P --> C
+    P --> D
+    P --> J
+```
+
+## Automated ML Pipeline
+
+The GitHub Actions pipeline automates the following workflow:
+
+1. Trigger training from the configured GitHub branch.
+2. Launch remote training on an AWS EC2 Spot instance using AWS Systems Manager.
+3. Train the task-priority classification model.
+4. Log experiment parameters and metrics to MLflow.
+5. Store model artifacts in Amazon S3.
+6. Register the trained model in the MLflow Model Registry.
+7. Deploy the staging model to Amazon EKS.
+8. Require production environment approval.
+9. Promote the approved model using the production alias.
+10. Deploy the production API to EKS.
+
+AWS authentication uses GitHub Actions OIDC instead of storing long-lived AWS access keys in GitHub secrets.
+
+## Model Serving
+
+The FastAPI application loads the production model from the MLflow Model Registry.
+
+### Prediction endpoint
+
+`POST /predict`
+
+Example request:
+
+```json
+{
+  "title": "Fix critical production bug",
+  "description": "Application crashes and needs immediate attention"
+}
+```
+
+Example response:
+
+```json
+{
+  "title": "Fix critical production bug",
+  "predicted_priority": "high"
+}
+```
+
+### API endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `/health` | API health check |
+| `/predict` | Predict task priority |
+| `/metrics` | Prometheus metrics |
+| `/docs` | Interactive Swagger documentation |
+
+## Kubernetes Deployment
+
+The application is deployed to Amazon EKS.
+
+- Production deployment: `taskly-api`
+- Staging deployment: `taskly-api-staging`
+- Namespace: `mlflow`
+- Production replicas: 2
+- API service: `taskly-api`
+
+### Verify deployment
+
+```bash
+kubectl get pods -n mlflow
+kubectl get svc -n mlflow
+```
+
+### Access production API locally
+
+```bash
+kubectl port-forward svc/taskly-api 8000:8000 -n mlflow
+```
+
+Verify health:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Test prediction:
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Fix critical production bug","description":"Application crashes"}'
+```
+
+## Monitoring and Alerting
+
+Prometheus scrapes application metrics from the FastAPI `/metrics` endpoint.
+
+Application metrics include:
+
+- `taskly_predictions_total` – total predictions by model version and priority
+- `taskly_prediction_errors_total` – prediction errors
+- `taskly_prediction_latency_seconds` – prediction latency histogram
+- `taskly_model_version_info` – currently loaded model version
+
+Grafana visualizes Prometheus metrics.
+
+### Custom alert
+
+`TasklyHighPredictionErrorRate` triggers when the prediction error rate exceeds 5% for 2 minutes.
+
+Alert rule file:
+
+`monitoring/alerts/taskly-alerts.yaml`
+
+The rule is deployed as a Kubernetes `PrometheusRule` resource.
+
+## Spot Instance Decision Log
+
+### Decision
+
+Use Amazon EC2 Spot Instances for remote ML training.
+
+### Rationale
+
+- Training is a batch workload rather than a continuously running service.
+- Spot Instances can reduce compute costs compared with On-Demand instances.
+- Training can be restarted if an instance is interrupted.
+- Production inference remains on EKS rather than depending on the training instance.
+
+### Trade-offs
+
+| Benefit | Risk / Trade-off |
+|---|---|
+| Lower compute cost | Spot capacity can be interrupted |
+| Suitable for batch training | Training may need to restart |
+| Cost-efficient experimentation | Availability is not guaranteed |
+
+### Interruption strategy
+
+- Training is initiated through GitHub Actions and AWS Systems Manager.
+- Training artifacts and experiment results are stored externally in MLflow and S3.
+- If Spot capacity is interrupted, the training workflow can be retried.
+- Production inference is independent of the Spot training instance.
+
+## Infrastructure as Code
+
+Terraform provisions the AWS infrastructure used by the project, including supporting resources for:
+
+- GitHub Actions IAM/OIDC integration
+- Spot training EC2 resources
+- Spot training networking
+
+Infrastructure configuration is maintained under `infra/terraform/`.
+
+## Project Scope
+
+This project demonstrates:
+
+- Automated ML training
+- Experiment tracking
+- Model artifact management
+- Model registry and promotion
+- CI/CD automation
+- Kubernetes model serving
+- Application observability
+- Monitoring and alerting
+- Infrastructure automation
+- Cost-aware batch training
+
+For local API setup, CRUD operations, Docker Compose, and manual model training instructions, see the original Tasks API documentation below.
+
 # Tasks API
 
 A minimal FastAPI task tracker backed by Postgres, with a Redis read-through cache.
